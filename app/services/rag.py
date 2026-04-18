@@ -127,10 +127,9 @@ def rerank_chunks(question: str, chunks: List[str], top_k: int = TOP_K_FINAL) ->
 def build_context(chunks: List[str]) -> str:
     """
     Assemble chunks into a coherent context for the LLM.
-    Returns:
-        Assembled context string.
+    On retire les balises [Document X] pour s'assurer que le LLM ne les recrache pas.
     """
-    return "\n\n".join([f"[Document {i+1}]\n{chunk}" for i, chunk in enumerate(chunks)])
+    return "\n\n---\n\n".join(chunks)
 
 def generate_response(question: str, context: str) -> str:
     """
@@ -138,21 +137,22 @@ def generate_response(question: str, context: str) -> str:
     """
     llm = _build_llm()
     
-    # Un prompt plus directif pour éviter que le modèle ne "décroche" sur les longs contextes
-    prompt = f"""Tu es un assistant technique précis. Analyse les extraits de documents fournis ci-dessous pour répondre à la question.
+    # Prompt ajusté : on exige l'exhaustivité et on interdit la mention des sources
+    prompt = f"""Tu es un assistant technique précis et exhaustif. Analyse le contexte fourni ci-dessous pour répondre à la question de manière complète.
 
 ### RÈGLES :
 1. Utilise UNIQUEMENT les informations du contexte fourni.
-2. Si la réponse n'est pas dans le contexte, réponds : "Je ne trouve pas assez d'informations dans les documents pour répondre précisément."
-3. Structure ta réponse de manière logique et cite les [Document X] si nécessaire.
+2. Sois exhaustif : tu dois inclure tous les détails, options, conditions ou notes spécifiques présents dans le texte (par exemple, les durées de session, les messages d'erreur, etc.).
+3. Ne mentionne JAMAIS tes sources. Ne dis pas "Selon le document", "D'après le contexte fourni" ou "Document X". Réponds directement et naturellement.
+4. Si la réponse n'est pas dans le contexte, réponds : "Je ne trouve pas assez d'informations pour répondre précisément."
 
-### CONTEXTE DES DOCUMENTS :
+### CONTEXTE :
 {context}
 
 ### QUESTION DE L'UTILISATEUR :
 {question}
 
-### RÉPONSE DE L'ASSISTANT :"""
+### RÉPONSE :"""
 
     response = llm.invoke(prompt)
     return response.strip()
