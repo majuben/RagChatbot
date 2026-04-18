@@ -39,7 +39,7 @@ def _build_embeddings() -> OllamaEmbeddings:
 def _build_llm() -> Ollama:
     """Build Ollama LLM connector."""
     return Ollama(
-        model=os.getenv("OLLAMA_MODEL", "gemma2:2b"), 
+        model=os.getenv("OLLAMA_MODEL", "gemma4:e2b"), 
         base_url=os.getenv("OLLAMA_URL", "http://localhost:11434"),
     )
 
