@@ -1,16 +1,17 @@
 """
 RAG service implementation connecting Ollama and PostgreSQL.
-This module handles the complete RAG pipeline:
-- Document chunking and ingestion
-- Vector embedding and indexing
-- Similarity retrieval
-- Reranking
-- Context-aware LLM response generation
+
+Améliorations v2 :
+- Chunking plus fin avec meilleur overlap
+- Suppression du faux reranker (cosine redondant avec PGVector)
+- Déduplication des chunks similaires
+- Prompt optimisé pour la synthèse multi-sources
+- Regroupement des chunks par source pour structurer le contexte
 """
 
 import io
 import os
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_ollama import OllamaLLM as Ollama
 from langchain_core.documents import Document
@@ -21,27 +22,25 @@ import docx
 
 from .ollama import build_llm, build_embeddings
 
-VECTORSTORE_TABLE_NAME = os.getenv("VECTORSTORE_TABLE_NAME", "rag_documents")
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/ragbot")
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "512"))
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "50"))
-TOP_K_RETRIEVAL = int(os.getenv("TOP_K_RETRIEVAL", "5"))
-TOP_K_FINAL = int(os.getenv("TOP_K_FINAL", "3"))
+VECTORSTORE_TABLE_NAME = os.getenv("VECTORSTORE_TABLE_NAME")
+DATABASE_URL = os.getenv("DATABASE_URL")
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE"))       
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP"))  
+TOP_K_RETRIEVAL = int(os.getenv("TOP_K_RETRIEVAL"))  
+TOP_K_FINAL = int(os.getenv("TOP_K_FINAL"))           
+SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD"))  
 SUPPORTED_FILE_TYPES = [".pdf", ".docx"]
 
 
 def _build_embeddings() -> OllamaEmbeddings:
-    """Build Ollama embeddings connector using a dedicated embedding model."""
     return build_embeddings()
 
 
 def _build_llm() -> Ollama:
-    """Build Ollama LLM connector."""
     return build_llm()
 
 
 def _get_vectorstore() -> PGVector:
-    """Get or create PGVector store."""
     embeddings = _build_embeddings()
     return PGVector(
         collection_name=VECTORSTORE_TABLE_NAME,
@@ -51,19 +50,16 @@ def _get_vectorstore() -> PGVector:
 
 
 def _extract_text_from_pdf(file_bytes: bytes) -> str:
-    """Extract text from a PDF file's byte stream."""
     with fitz.open(stream=file_bytes, filetype="pdf") as document:
         return "\n\n".join(page.get_text() for page in document)
 
 
 def _extract_text_from_docx(file_bytes: bytes) -> str:
-    """Extract text from a DOCX file's byte stream."""
     document = docx.Document(io.BytesIO(file_bytes))
     return "\n\n".join(paragraph.text for paragraph in document.paragraphs if paragraph.text)
 
 
 def _extract_text_from_file(file_name: str, file_bytes: bytes) -> str:
-    """Detect file type and extract text from PDF or DOCX."""
     file_name_lower = file_name.lower()
     if file_name_lower.endswith(".pdf"):
         return _extract_text_from_pdf(file_bytes)
@@ -73,100 +69,137 @@ def _extract_text_from_file(file_name: str, file_bytes: bytes) -> str:
 
 
 def chunk_documents(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> List[str]:
-    # On définit des séparateurs logiques pour ne pas couper n'importe où
+    """
+    Découpe le texte en chunks avec des séparateurs sémantiques.
+    Chunks plus petits = meilleure précision de retrieval.
+    """
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=overlap,
-        separators=["\n\n", "\n", ".", " ", ""],
-        strip_whitespace=True
+        separators=["\n\n", "\n", ". ", "! ", "? ", ", ", " ", ""],
+        strip_whitespace=True,
+        length_function=len,
     )
     chunks = splitter.split_text(text)
-    return [c.strip() for c in chunks if c and len(c.strip()) > 10] # On ignore les chunks vides ou trop courts
+    return [c.strip() for c in chunks if c and len(c.strip()) > 20]
 
 
-def retrieve_chunks(question: str, top_k: int = TOP_K_RETRIEVAL) -> List[str]:
+def _cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
+    """Calcule la similarité cosine entre deux vecteurs."""
+    dot = sum(a * b for a, b in zip(vec_a, vec_b))
+    norm_a = sum(a ** 2 for a in vec_a) ** 0.5
+    norm_b = sum(b ** 2 for b in vec_b) ** 0.5
+    return dot / (norm_a * norm_b + 1e-8)
+
+
+def deduplicate_chunks(
+    docs_with_scores: List[Tuple[Document, float]],
+    threshold: float = SIMILARITY_THRESHOLD
+) -> List[Tuple[Document, float]]:
     """
-    Récupère les chunks avec leurs scores de distance pour le débug.
+    Supprime les chunks quasi-identiques basé sur le score de distance PGVector.
+    """
+    seen_previews = []
+    deduplicated = []
+
+    for doc, score in docs_with_scores:
+        preview = doc.page_content[:120].strip()
+        is_duplicate = False
+        for seen in seen_previews:
+            overlap_chars = sum(1 for a, b in zip(preview, seen) if a == b)
+            similarity = overlap_chars / max(len(preview), len(seen), 1)
+            if similarity > 0.75:
+                is_duplicate = True
+                break
+
+        if not is_duplicate:
+            seen_previews.append(preview)
+            deduplicated.append((doc, score))
+
+    return deduplicated
+
+
+def retrieve_chunks(question: str, top_k: int = TOP_K_RETRIEVAL) -> List[Document]:
+    """
+    Récupère les chunks les plus pertinents avec déduplication.
+    Retourne des Documents complets (avec metadata source) pour le regroupement.
     """
     vectorstore = _get_vectorstore()
-    
-    # On utilise similarity_search_with_score au lieu de similarity_search
-    # Retourne une liste de tuples (Document, score)
     results_with_scores = vectorstore.similarity_search_with_score(question, k=top_k)
-    
+
     print(f"\n--- DEBUG RETRIEVAL (Top {top_k}) ---")
     for i, (doc, score) in enumerate(results_with_scores):
-        # Plus le score est petit, plus le chunk est pertinent (distance)
-        print(f"Rank {i+1} | Score (Distance): {score:.4f} | Preview: {doc.page_content[:70]}...")
+        source = doc.metadata.get("source", "inconnu")
+        print(f"Rank {i+1} | Score: {score:.4f} | Source: {source} | Preview: {doc.page_content[:70]}...")
     print("------------------------------------\n")
+    deduplicated = deduplicate_chunks(results_with_scores)
 
-    return [doc.page_content for doc, score in results_with_scores]
+    print(f"Après déduplication : {len(deduplicated)}/{len(results_with_scores)} chunks retenus")
+
+    final_docs = [doc for doc, score in deduplicated[:TOP_K_FINAL]]
+    return final_docs
 
 
-def rerank_chunks(question: str, chunks: List[str], top_k: int = TOP_K_FINAL) -> List[str]:
+def build_context(docs: List[Document]) -> str:
     """
-    Rerank retrieved chunks by semantic relevance (simple scoring for now).
-    Returns:
-        Top-k reranked chunks.
+    Regroupe les chunks par source pour donner une structure claire au LLM.
     """
-    embeddings = _build_embeddings()
-    query_embedding = embeddings.embed_query(question)
-    
-    scored_chunks = []
-    for chunk in chunks:
-        chunk_embedding = embeddings.embed_query(chunk)
-        score = sum(a * b for a, b in zip(query_embedding, chunk_embedding)) / (
-            (sum(a**2 for a in query_embedding)**0.5 * sum(b**2 for b in chunk_embedding)**0.5) + 1e-6
-        )
-        scored_chunks.append((chunk, score))
-    
-    ranked = sorted(scored_chunks, key=lambda x: x[1], reverse=True)
-    return [chunk for chunk, _ in ranked[:top_k]]
+
+    sources: dict[str, List[str]] = {}
+    for doc in docs:
+        source = doc.metadata.get("source", "Document sans nom")
+        sources.setdefault(source, []).append(doc.page_content)
 
 
-def build_context(chunks: List[str]) -> str:
-    """
-    Assemble chunks into a coherent context for the LLM.
-    On retire les balises [Document X] pour s'assurer que le LLM ne les recrache pas.
-    """
-    return "\n\n---\n\n".join(chunks)
+    context_parts = []
+    for source_name, chunks in sources.items():
+        combined = "\n\n".join(chunks)
+        context_parts.append(f"[SOURCE : {source_name}]\n{combined}")
 
-def generate_response(question: str, context: str) -> str:
+    return "\n\n===\n\n".join(context_parts)
+
+
+def generate_response(question: str, context: str, sources: List[str]) -> str:
     """
-    Génère une réponse LLM basée sur un contexte structuré.
+    Génère une réponse complète en forçant la synthèse multi-sources.
     """
     llm = _build_llm()
-    
-    # Prompt ajusté : on exige l'exhaustivité et on interdit la mention des sources
-    prompt = f"""Tu es un assistant technique précis et exhaustif. Analyse le contexte fourni ci-dessous pour répondre à la question de manière complète.
 
-### RÈGLES :
-1. Utilise UNIQUEMENT les informations du contexte fourni.
-2. Sois exhaustif : tu dois inclure tous les détails, options, conditions ou notes spécifiques présents dans le texte (par exemple, les durées de session, les messages d'erreur, etc.).
-3. Ne mentionne JAMAIS tes sources. Ne dis pas "Selon le document", "D'après le contexte fourni" ou "Document X". Réponds directement et naturellement.
-4. Si la réponse n'est pas dans le contexte, réponds : "Je ne trouve pas assez d'informations pour répondre précisément."
 
-### CONTEXTE :
+    sources_list = "\n".join(f"- {s}" for s in set(sources)) if sources else "- Document unique"
+
+    prompt = f"""Tu es un assistant expert en analyse documentaire. Tu disposes d'extraits issus de {len(set(sources))} source(s) :
+{sources_list}
+
+Ta mission : répondre à la question de façon COMPLÈTE et EXHAUSTIVE en exploitant TOUTES les informations pertinentes présentes dans le contexte, quelle que soit leur source.
+
+RÈGLES STRICTES :
+1. Synthétise et regroupe les informations complémentaires provenant de sources différentes.
+2. Si plusieurs sources donnent des informations sur le même sujet, combine-les en une réponse unifiée.
+3. Sois exhaustif : inclus tous les détails, conditions, étapes, valeurs numériques, exceptions.
+4. Réponds directement et naturellement, sans mentionner "selon le document" ou "d'après le contexte".
+5. Si une information n'est vraiment pas dans le contexte, dis-le brièvement à la fin.
+
+CONTEXTE DOCUMENTAIRE :
 {context}
 
-### QUESTION DE L'UTILISATEUR :
+QUESTION :
 {question}
 
-### RÉPONSE :"""
+RÉPONSE COMPLÈTE ET SYNTHÉTISÉE :"""
 
     response = llm.invoke(prompt)
     return response.strip()
 
+
 def ingest(texts: List[str], source: Optional[str] = None) -> None:
     """
-    Ingest and index documents.
-    1. Chunk each text
-    2. Create Document objects
-    3. Add to vector store
+    Ingère et indexe des textes dans le vector store.
     """
     all_documents = []
     for text in texts:
         chunks = chunk_documents(text)
+        print(f"[INGEST] {len(chunks)} chunks générés pour '{source}'")
         for chunk in chunks:
             metadata = {"source": source} if source else {}
             all_documents.append(Document(page_content=chunk, metadata=metadata))
@@ -174,10 +207,10 @@ def ingest(texts: List[str], source: Optional[str] = None) -> None:
     if all_documents:
         vectorstore = _get_vectorstore()
         vectorstore.add_documents(all_documents)
+        print(f"[INGEST] ✅ {len(all_documents)} chunks indexés.")
 
 
 def ingest_file(file_name: str, file_bytes: bytes) -> str:
-    """Extract text from a supported file and ingest it into the vector store."""
     text = _extract_text_from_file(file_name, file_bytes)
     if not text or not text.strip():
         raise ValueError("No readable text found in uploaded file.")
@@ -187,31 +220,35 @@ def ingest_file(file_name: str, file_bytes: bytes) -> str:
 
 def respond(question: str) -> str:
     """
-    Pipeline RAG simplifié : Récupération directe -> Construction du contexte -> Génération.
+    Pipeline RAG amélioré :
+    1. Retrieval large (TOP_K_RETRIEVAL)
+    2. Déduplication
+    3. Sélection finale (TOP_K_FINAL)
+    4. Regroupement par source
+    5. Génération avec prompt de synthèse multi-sources
     """
-    
-    retrieved_chunks = retrieve_chunks(question, top_k=TOP_K_RETRIEVAL)
-    context = build_context(retrieved_chunks)
-    response = generate_response(question, context)
+    docs = retrieve_chunks(question, top_k=TOP_K_RETRIEVAL)
+
+    if not docs:
+        return "Je n'ai trouvé aucune information pertinente dans les documents indexés."
+
+    context = build_context(docs)
+    sources = [doc.metadata.get("source", "inconnu") for doc in docs]
+    response = generate_response(question, context, sources)
     return response
 
 
 class RAGService:
-    """High-level RAG service for API integration."""
-
     @staticmethod
     def ingest(texts: List[str], source: Optional[str] = None) -> None:
-        """Ingest documents into the RAG system."""
         ingest(texts, source=source)
 
     @staticmethod
     def ingest_file(file_name: str, file_bytes: bytes) -> str:
-        """Ingest a file into the RAG system."""
         return ingest_file(file_name, file_bytes)
 
     @staticmethod
     def respond(question: str) -> str:
-        """Generate a response using the RAG pipeline."""
         return respond(question)
 
 

@@ -14,7 +14,7 @@ load_dotenv()
 
 def get_ollama_model() -> str:
    
-    return os.getenv("OLLAMA_MODEL", "gemma4:e2b")
+    return os.getenv("OLLAMA_MODEL", "qwen3:8b")
 
 def get_ollama_embedding_model() -> str:
     # Dedicated embedding model
