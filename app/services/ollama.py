@@ -32,6 +32,5 @@ def build_llm() -> OllamaLLM:
 def build_embeddings() -> OllamaEmbeddings:
     return OllamaEmbeddings(
         model=get_ollama_embedding_model(),
-        base_url=get_ollama_url(),
-        show_progress=False,
+        base_url=get_ollama_url()
     )
