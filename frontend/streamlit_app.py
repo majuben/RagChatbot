@@ -10,7 +10,7 @@ import requests
 
 st.set_page_config(page_title="RAG Chatbot UI", layout="centered")
 
-API_URL = os.getenv("API_URL")
+API_URL = "http://web:8000/api/chat"
 
 
 def post_request(endpoint: str, payload: dict) -> dict:
