@@ -23,12 +23,5 @@ services:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
 
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    command: ["serve"]
-    restart: unless-stopped
-
 volumes:
   postgres_data:

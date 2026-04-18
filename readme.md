@@ -13,24 +13,11 @@ Projet de démonstration RAG avec FastAPI, LangChain, Ollama et PostgreSQL.
 ## Installation
 
 1. Copier `.env` et mettre à jour si nécessaire.
-2. Lancer `docker compose up --build`.
-3. Accéder à `http://localhost:8000`.
+2. Si Ollama tourne déjà sur votre machine, vérifiez que `OLLAMA_URL` pointe vers `http://host.docker.internal:11434`.
+3. Lancer `docker compose up --build`.
+4. Accéder à `http://localhost:8000`.
 
 ## Endpoints
 
 - `POST /api/chat/ingest` : ingérer du texte dans la base RAG.
 - `POST /api/chat/respond` : poser une question et recevoir une réponse contextuelle.
-
-## Exemple de payload
-
-```json
-{
-  "text": "Voici un document d'exemple à stocker."
-}
-```
-
-```json
-{
-  "question": "Que peut-on dire sur ce document ?"
-}
-```
