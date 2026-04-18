@@ -8,11 +8,23 @@ services:
       - .env
     depends_on:
       - db
-      - ollama
+    restart: unless-stopped
+
+  streamlit:
+    build: .
+    command: streamlit run frontend/streamlit_app.py --server.port 8501 --server.address 0.0.0.0
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      API_URL: "http://web:8000/api/chat"
+    depends_on:
+      - web
     restart: unless-stopped
 
   db:
-    image: pgvector/postgres:latest
+    image: pgvector/pgvector:pg17
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
