@@ -19,6 +19,8 @@ from langchain_community.vectorstores import PGVector
 import fitz
 import docx
 
+from .ollama import build_llm, build_embeddings
+
 VECTORSTORE_TABLE_NAME = os.getenv("VECTORSTORE_TABLE_NAME", "rag_documents")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/ragbot")
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "512"))
@@ -30,18 +32,12 @@ SUPPORTED_FILE_TYPES = [".pdf", ".docx"]
 
 def _build_embeddings() -> OllamaEmbeddings:
     """Build Ollama embeddings connector using a dedicated embedding model."""
-    return OllamaEmbeddings(
-        model=os.getenv("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text"),
-        base_url=os.getenv("OLLAMA_URL", "http://localhost:11434"),
-    )
+    return build_embeddings()
 
 
 def _build_llm() -> Ollama:
     """Build Ollama LLM connector."""
-    return Ollama(
-        model=os.getenv("OLLAMA_MODEL", "gemma4:e2b"), 
-        base_url=os.getenv("OLLAMA_URL", "http://localhost:11434"),
-    )
+    return build_llm()
 
 
 def _get_vectorstore() -> PGVector:
@@ -77,25 +73,34 @@ def _extract_text_from_file(file_name: str, file_bytes: bytes) -> str:
 
 
 def chunk_documents(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> List[str]:
-    """
-    Split long documents into manageable chunks.
-    Returns:
-        List of text chunks.
-    """
-    splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=overlap)
+    # On définit des séparateurs logiques pour ne pas couper n'importe où
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=overlap,
+        separators=["\n\n", "\n", ".", " ", ""],
+        strip_whitespace=True
+    )
     chunks = splitter.split_text(text)
-    return [c.strip() for c in chunks if c and c.strip()]
+    return [c.strip() for c in chunks if c and len(c.strip()) > 10] # On ignore les chunks vides ou trop courts
 
 
 def retrieve_chunks(question: str, top_k: int = TOP_K_RETRIEVAL) -> List[str]:
     """
-    Retrieve relevant chunks from the vector store.
-    Returns:
-        List of retrieved chunk documents as strings.
+    Récupère les chunks avec leurs scores de distance pour le débug.
     """
     vectorstore = _get_vectorstore()
-    results = vectorstore.similarity_search(question, k=top_k)
-    return [doc.page_content for doc in results]
+    
+    # On utilise similarity_search_with_score au lieu de similarity_search
+    # Retourne une liste de tuples (Document, score)
+    results_with_scores = vectorstore.similarity_search_with_score(question, k=top_k)
+    
+    print(f"\n--- DEBUG RETRIEVAL (Top {top_k}) ---")
+    for i, (doc, score) in enumerate(results_with_scores):
+        # Plus le score est petit, plus le chunk est pertinent (distance)
+        print(f"Rank {i+1} | Score (Distance): {score:.4f} | Preview: {doc.page_content[:70]}...")
+    print("------------------------------------\n")
+
+    return [doc.page_content for doc, score in results_with_scores]
 
 
 def rerank_chunks(question: str, chunks: List[str], top_k: int = TOP_K_FINAL) -> List[str]:
@@ -127,26 +132,30 @@ def build_context(chunks: List[str]) -> str:
     """
     return "\n\n".join([f"[Document {i+1}]\n{chunk}" for i, chunk in enumerate(chunks)])
 
-
 def generate_response(question: str, context: str) -> str:
     """
-    Generate LLM response based on context and question.
-    Returns:
-        LLM-generated response.
+    Génère une réponse LLM basée sur un contexte structuré.
     """
     llm = _build_llm()
-    prompt = f"""Answer the question based on the provided context. If the context does not contain the answer, say \"I don't have enough information.\"
+    
+    # Un prompt plus directif pour éviter que le modèle ne "décroche" sur les longs contextes
+    prompt = f"""Tu es un assistant technique précis. Analyse les extraits de documents fournis ci-dessous pour répondre à la question.
 
-Context:
+### RÈGLES :
+1. Utilise UNIQUEMENT les informations du contexte fourni.
+2. Si la réponse n'est pas dans le contexte, réponds : "Je ne trouve pas assez d'informations dans les documents pour répondre précisément."
+3. Structure ta réponse de manière logique et cite les [Document X] si nécessaire.
+
+### CONTEXTE DES DOCUMENTS :
 {context}
 
-Question: {question}
+### QUESTION DE L'UTILISATEUR :
+{question}
 
-Answer:"""
-    # Mise à jour de l'appel pour utiliser la méthode standard de LangChain
+### RÉPONSE DE L'ASSISTANT :"""
+
     response = llm.invoke(prompt)
     return response.strip()
-
 
 def ingest(texts: List[str], source: Optional[str] = None) -> None:
     """
@@ -178,13 +187,11 @@ def ingest_file(file_name: str, file_bytes: bytes) -> str:
 
 def respond(question: str) -> str:
     """
-    Full RAG pipeline: retrieve, rerank, assemble context, generate response.
-    Returns:
-        LLM-generated answer.
+    Pipeline RAG simplifié : Récupération directe -> Construction du contexte -> Génération.
     """
+    
     retrieved_chunks = retrieve_chunks(question, top_k=TOP_K_RETRIEVAL)
-    reranked_chunks = rerank_chunks(question, retrieved_chunks, top_k=TOP_K_FINAL)
-    context = build_context(reranked_chunks)
+    context = build_context(retrieved_chunks)
     response = generate_response(question, context)
     return response
 
