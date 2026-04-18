@@ -537,24 +537,31 @@ with st.sidebar:
     if uploaded_file:
         col_btn, col_void = st.columns([1, 0.3])
         with col_btn:
+        # Clé unique par fichier pour éviter le double envoi
+            file_key = f"ingested_{uploaded_file.name}"
+        
             if st.button("▲ Ingérer le document", use_container_width=True):
-                with st.spinner("Indexation en cours…"):
-                    try:
-                        files = {
-                            "file": (
-                                uploaded_file.name,
-                                uploaded_file.getvalue(),
-                                uploaded_file.type,
+                if file_key not in st.session_state:
+                    with st.spinner("Indexation en cours…"):
+                        try:
+                            files = {
+                                "file": (
+                                    uploaded_file.name,
+                                    uploaded_file.getvalue(),
+                                    uploaded_file.type,
+                                )
+                            }
+                            response = requests.post(
+                                f"{api_url}/ingest/file", files=files, timeout=60
                             )
-                        }
-                        response = requests.post(
-                            f"{api_url}/ingest/file", files=files, timeout=60
-                        )
-                        response.raise_for_status()
-                        st.session_state.documents.append(uploaded_file.name)
-                        st.success(f"✓ Indexé avec succès")
-                    except Exception as exc:
-                        st.error(f"Erreur: {exc}")
+                            response.raise_for_status()
+                            st.session_state[file_key] = True
+                            st.session_state.documents.append(uploaded_file.name)
+                            st.success(f"✓ Indexé avec succès")
+                        except Exception as exc:
+                            st.error(f"Erreur: {exc}")
+                else:
+                    st.warning(f"⚠️ '{uploaded_file.name}' déjà ingéré.")
 
     # Documents indexés
     if st.session_state.documents:
