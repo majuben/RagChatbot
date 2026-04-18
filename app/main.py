@@ -5,8 +5,10 @@ FastAPI application entrypoint for the RAG chatbot service.
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from app.api.routes.chat import router as chat_router
+from app.config.logging import setup_logging
 
 load_dotenv()
+setup_logging()
 
 app = FastAPI(
     title="RAG Chatbot",

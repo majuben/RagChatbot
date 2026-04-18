@@ -1,6 +1,9 @@
 fastapi==0.110.0
 uvicorn[standard]==0.23.2
 langchain==0.0.401
-ollama==0.1.12
+langchain-community==0.0.8
+ollama-python==0.1.12
 psycopg2-binary==2.9.10
+pgvector==0.1.8
 python-dotenv==1.0.0
+requests==2.31.0
