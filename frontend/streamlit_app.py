@@ -480,6 +480,14 @@ hr { border-color: var(--border) !important; }
 """, unsafe_allow_html=True)
 
 
+# ─── Helpers ─────────────────────────────────────────────────────────────────
+import html as _html
+
+def _safe_render(text: str) -> str:
+    """Escape HTML entities so raw text never breaks the bubble layout."""
+    return _html.escape(text).replace("\n", "<br>")
+
+
 # ─── Session State Init ──────────────────────────────────────────────────────
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -606,7 +614,6 @@ with chat_area:
         </div>
         """, unsafe_allow_html=True)
     else:
-        st.markdown('<div class="chat-container">', unsafe_allow_html=True)
         for msg in st.session_state.messages:
             role = msg["role"]
             content = msg["content"]
@@ -614,36 +621,41 @@ with chat_area:
             sources = msg.get("sources", [])
 
             if role == "user":
+                # Header row (avatar + time) via HTML
                 st.markdown(f"""
                 <div class="message-row user">
-                    <div>
-                        <div class="bubble user">{content}</div>
-                        <div class="msg-time">{ts}</div>
-                    </div>
-                    <div class="avatar user">U</div>
-                </div>
+                    <div style="display:flex; flex-direction:column; align-items:flex-end;">
+                        <div class="bubble-shell-user">
                 """, unsafe_allow_html=True)
+                # Content rendered safely by Streamlit
+                with st.container():
+                    st.markdown(
+                        f"<div class='bubble user'>{_safe_render(content)}</div>"
+                        f"<div class='msg-time' style='text-align:right;'>{ts}</div>",
+                        unsafe_allow_html=True,
+                    )
+                st.markdown("</div><div class='avatar user'>U</div></div>", unsafe_allow_html=True)
+
             else:
-                sources_html = ""
-                if sources:
-                    src_list = " · ".join(f"<span>{s}</span>" for s in sources)
-                    sources_html = f"""
-                    <div class="sources-card">
-                        <div class="src-label">Sources consultées</div>
-                        {src_list}
-                    </div>
-                    """
-                st.markdown(f"""
-                <div class="message-row ai">
-                    <div class="avatar ai">◈</div>
-                    <div>
-                        <div class="bubble ai">{content}</div>
-                        {sources_html}
-                        <div class="msg-time">{ts}</div>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+                # AI message — use columns to separate avatar from content
+                col_av, col_content = st.columns([0.06, 0.94])
+                with col_av:
+                    st.markdown('<div class="avatar ai" style="margin-top:0.3rem;">◈</div>', unsafe_allow_html=True)
+                with col_content:
+                    st.markdown('<div class="bubble ai">', unsafe_allow_html=True)
+                    # Safe markdown rendering — Streamlit handles the content
+                    st.markdown(content)
+                    st.markdown('</div>', unsafe_allow_html=True)
+                    if sources:
+                        src_list = " · ".join(f"<span>{s}</span>" for s in sources)
+                        st.markdown(f"""
+                        <div class="sources-card">
+                            <div class="src-label">Sources consultées</div>
+                            {src_list}
+                        </div>
+                        """, unsafe_allow_html=True)
+                    st.markdown(f'<div class="msg-time">{ts}</div>', unsafe_allow_html=True)
+                st.markdown("<div style='margin-bottom:1rem;'></div>", unsafe_allow_html=True)
 
 
 # ── Input Zone ───────────────────────────────────────────────────────────────
