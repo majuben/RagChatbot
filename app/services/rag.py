@@ -1,12 +1,6 @@
 """
 RAG service implementation connecting Ollama and PostgreSQL.
 
-Améliorations v2 :
-- Chunking plus fin avec meilleur overlap
-- Suppression du faux reranker (cosine redondant avec PGVector)
-- Déduplication des chunks similaires
-- Prompt optimisé pour la synthèse multi-sources
-- Regroupement des chunks par source pour structurer le contexte
 """
 
 import io
@@ -84,13 +78,6 @@ def chunk_documents(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUN
     return [c.strip() for c in chunks if c and len(c.strip()) > 20]
 
 
-def _cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
-    """Calcule la similarité cosine entre deux vecteurs."""
-    dot = sum(a * b for a, b in zip(vec_a, vec_b))
-    norm_a = sum(a ** 2 for a in vec_a) ** 0.5
-    norm_b = sum(b ** 2 for b in vec_b) ** 0.5
-    return dot / (norm_a * norm_b + 1e-8)
-
 
 def deduplicate_chunks(
     docs_with_scores: List[Tuple[Document, float]],
@@ -125,7 +112,7 @@ def retrieve_chunks(question: str, top_k: int = TOP_K_RETRIEVAL) -> List[Documen
     Retourne des Documents complets (avec metadata source) pour le regroupement.
     """
     vectorstore = _get_vectorstore()
-    results_with_scores = vectorstore.similarity_search_with_score(question, k=top_k)
+    results_with_scores = vectorstore.similarity_search_with_score("search_query: " + question, k=top_k)
 
     print(f"\n--- DEBUG RETRIEVAL (Top {top_k}) ---")
     for i, (doc, score) in enumerate(results_with_scores):
@@ -193,16 +180,21 @@ RÉPONSE COMPLÈTE ET SYNTHÉTISÉE :"""
 
 
 def ingest(texts: List[str], source: Optional[str] = None) -> None:
-    """
-    Ingère et indexe des textes dans le vector store.
-    """
     all_documents = []
     for text in texts:
         chunks = chunk_documents(text)
         print(f"[INGEST] {len(chunks)} chunks générés pour '{source}'")
         for chunk in chunks:
             metadata = {"source": source} if source else {}
-            all_documents.append(Document(page_content=chunk, metadata=metadata))
+            all_documents.append(Document(
+                page_content="search_document: " + chunk,  # ← prefix ajouté
+                metadata=metadata
+            ))
+
+    if all_documents:
+        vectorstore = _get_vectorstore()
+        vectorstore.add_documents(all_documents)
+        print(f"[INGEST] ✅ {len(all_documents)} chunks indexés.")
 
     if all_documents:
         vectorstore = _get_vectorstore()
