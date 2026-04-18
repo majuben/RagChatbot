@@ -18,7 +18,7 @@ def get_ollama_model() -> str:
 
 def get_ollama_embedding_model() -> str:
     # Dedicated embedding model
-    return os.getenv("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text")
+    return os.getenv("OLLAMA_EMBEDDING_MODEL", "bge-m3")
 
 def get_ollama_url() -> str:
     return os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
