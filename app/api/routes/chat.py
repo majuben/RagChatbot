@@ -1,13 +1,20 @@
 """
 FastAPI endpoints for chat and document ingestion.
 These endpoints are the public REST interface for the RAG chatbot.
-Provides ingest, respond, batch operations, and system health monitoring.
+Provides ingest, file upload, respond, batch operations, and system health monitoring.
 """
 
 import logging
 from typing import List
-from fastapi import APIRouter, HTTPException, BackgroundTasks
-from app.schemas.chat import ChatRequest, ChatResponse, IngestRequest, BatchIngestRequest, HealthResponse
+from fastapi import APIRouter, HTTPException, BackgroundTasks, UploadFile, File
+from app.schemas.chat import (
+    ChatRequest,
+    ChatResponse,
+    IngestRequest,
+    BatchIngestRequest,
+    HealthResponse,
+    FileIngestResponse,
+)
 from app.services.rag import rag_service
 
 logger = logging.getLogger(__name__)
@@ -53,6 +60,41 @@ async def ingest(request: IngestRequest):
     except Exception as exc:
         logger.error(f"Ingest error: {exc}")
         raise HTTPException(status_code=500, detail=f"Ingest failed: {str(exc)}")
+
+
+@router.post("/ingest/file", response_model=FileIngestResponse, tags=["ingestion"])
+async def ingest_file(file: UploadFile = File(...)):
+    """
+    Ingest a PDF or Word document via file upload.
+    - Reads the file
+    - Extracts text
+    - Chunks and indexes content into PGVector
+    """
+    try:
+        if not file.filename:
+            raise ValueError("Uploaded file must have a filename")
+
+        filename = file.filename.lower()
+        if not filename.endswith((".pdf", ".docx")):
+            raise ValueError("Only PDF and DOCX files are supported")
+
+        contents = await file.read()
+        text = rag_service.ingest_file(file.filename, contents)
+        logger.info(f"Ingested file {file.filename} ({len(contents)} bytes)")
+
+        return FileIngestResponse(
+            status="ok",
+            message="File ingested successfully",
+            filename=file.filename,
+            size_bytes=len(contents),
+            extracted_chars=len(text),
+        )
+    except ValueError as exc:
+        logger.warning(f"Validation error during file ingest: {exc}")
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"File ingest error: {exc}")
+        raise HTTPException(status_code=500, detail=f"File ingest failed: {str(exc)}")
 
 
 @router.post("/ingest/batch", tags=["ingestion"])

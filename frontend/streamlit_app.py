@@ -71,6 +71,22 @@ def main():
             except Exception as exc:
                 st.error(f"Erreur debug retrieval : {exc}")
 
+    st.divider()
+    st.subheader("4. Ingestion de fichier")
+    uploaded_file = st.file_uploader("Téléchargez un fichier PDF ou DOCX", type=["pdf", "docx"])
+    if st.button("Ingest file"):
+        if uploaded_file is None:
+            st.warning("Veuillez sélectionner un fichier PDF ou DOCX.")
+        else:
+            try:
+                files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
+                response = requests.post(f"{api_url}/ingest/file", files=files, timeout=60)
+                response.raise_for_status()
+                st.success("Fichier ingéré avec succès.")
+                st.json(response.json())
+            except Exception as exc:
+                st.error(f"Erreur d'ingestion de fichier : {exc}")
+
 
 if __name__ == "__main__":
     main()

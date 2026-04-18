@@ -8,8 +8,9 @@ This module handles the complete RAG pipeline:
 - Context-aware LLM response generation
 """
 
+import io
 import os
-from typing import List
+from typing import List, Optional
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.docstore.document import Document
 from langchain.embeddings import OllamaEmbeddings
@@ -22,6 +23,7 @@ CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "512"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "50"))
 TOP_K_RETRIEVAL = int(os.getenv("TOP_K_RETRIEVAL", "5"))
 TOP_K_FINAL = int(os.getenv("TOP_K_FINAL", "3"))
+SUPPORTED_FILE_TYPES = [".pdf", ".docx"]
 
 
 def _build_embeddings() -> OllamaEmbeddings:
@@ -49,6 +51,32 @@ def _get_vectorstore() -> PGVector:
         embedding_function=embeddings,
         text_key="text",
     )
+
+
+def _extract_text_from_pdf(file_bytes: bytes) -> str:
+    """Extract text from a PDF file's byte stream."""
+    import fitz
+
+    with fitz.open(stream=file_bytes, filetype="pdf") as document:
+        return "\n\n".join(page.get_text() for page in document)
+
+
+def _extract_text_from_docx(file_bytes: bytes) -> str:
+    """Extract text from a DOCX file's byte stream."""
+    import docx
+
+    document = docx.Document(io.BytesIO(file_bytes))
+    return "\n\n".join(paragraph.text for paragraph in document.paragraphs if paragraph.text)
+
+
+def _extract_text_from_file(file_name: str, file_bytes: bytes) -> str:
+    """Detect file type and extract text from PDF or DOCX."""
+    file_name_lower = file_name.lower()
+    if file_name_lower.endswith(".pdf"):
+        return _extract_text_from_pdf(file_bytes)
+    if file_name_lower.endswith(".docx"):
+        return _extract_text_from_docx(file_bytes)
+    raise ValueError("Unsupported file type. Only PDF and DOCX are supported.")
 
 
 def chunk_documents(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> List[str]:
@@ -85,7 +113,6 @@ def rerank_chunks(question: str, chunks: List[str], top_k: int = TOP_K_FINAL) ->
     scored_chunks = []
     for chunk in chunks:
         chunk_embedding = embeddings.embed_query(chunk)
-        # Simple cosine similarity placeholder
         score = sum(a * b for a, b in zip(query_embedding, chunk_embedding)) / (
             (sum(a**2 for a in query_embedding)**0.5 * sum(b**2 for b in chunk_embedding)**0.5) + 1e-6
         )
@@ -111,7 +138,7 @@ def generate_response(question: str, context: str) -> str:
         LLM-generated response.
     """
     llm = _build_llm()
-    prompt = f"""Answer the question based on the provided context. If the context does not contain the answer, say "I don't have enough information."
+    prompt = f"""Answer the question based on the provided context. If the context does not contain the answer, say \"I don't have enough information.\"
 
 Context:
 {context}
@@ -123,23 +150,32 @@ Answer:"""
     return response.strip()
 
 
-def ingest(texts: List[str]) -> None:
+def ingest(texts: List[str], source: Optional[str] = None) -> None:
     """
     Ingest and index documents.
     1. Chunk each text
     2. Create Document objects
     3. Add to vector store
-
     """
-    all_chunks = []
+    all_documents = []
     for text in texts:
         chunks = chunk_documents(text)
-        all_chunks.extend(chunks)
-    
-    if all_chunks:
-        documents = [Document(page_content=chunk) for chunk in all_chunks]
+        for chunk in chunks:
+            metadata = {"source": source} if source else {}
+            all_documents.append(Document(page_content=chunk, metadata=metadata))
+
+    if all_documents:
         vectorstore = _get_vectorstore()
-        vectorstore.add_documents(documents)
+        vectorstore.add_documents(all_documents)
+
+
+def ingest_file(file_name: str, file_bytes: bytes) -> str:
+    """Extract text from a supported file and ingest it into the vector store."""
+    text = _extract_text_from_file(file_name, file_bytes)
+    if not text or not text.strip():
+        raise ValueError("No readable text found in uploaded file.")
+    ingest([text], source=file_name)
+    return text
 
 
 def respond(question: str) -> str:
@@ -159,9 +195,14 @@ class RAGService:
     """High-level RAG service for API integration."""
 
     @staticmethod
-    def ingest(texts: List[str]) -> None:
+    def ingest(texts: List[str], source: Optional[str] = None) -> None:
         """Ingest documents into the RAG system."""
-        ingest(texts)
+        ingest(texts, source=source)
+
+    @staticmethod
+    def ingest_file(file_name: str, file_bytes: bytes) -> str:
+        """Ingest a file into the RAG system."""
+        return ingest_file(file_name, file_bytes)
 
     @staticmethod
     def respond(question: str) -> str:
