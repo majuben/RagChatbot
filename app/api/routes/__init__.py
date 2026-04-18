@@ -1,0 +1,7 @@
+"""Route package for the chatbot API."""
+
+from fastapi import APIRouter
+from app.api.routes.chat import router as chat_router
+
+router = APIRouter()
+router.include_router(chat_router)
