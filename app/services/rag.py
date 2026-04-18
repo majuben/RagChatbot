@@ -187,12 +187,20 @@ def ingest(texts: List[str], source: Optional[str] = None) -> None:
         for chunk in chunks:
             metadata = {"source": source} if source else {}
             all_documents.append(Document(
-                page_content="search_document: " + chunk,  # ← prefix ajouté
+                page_content="search_document: " + chunk,
                 metadata=metadata
             ))
 
     if all_documents:
         vectorstore = _get_vectorstore()
+        
+        existing = vectorstore.similarity_search(
+            "test", k=1, filter={"source": source}
+        )
+        if existing:
+            print(f"[INGEST] ⚠️ Source '{source}' déjà indexée, skip.")
+            return
+            
         vectorstore.add_documents(all_documents)
         print(f"[INGEST] ✅ {len(all_documents)} chunks indexés.")
 
