@@ -721,7 +721,7 @@ if send and question and question.strip():
             response = requests.post(
                 f"{st.session_state.api_url}/respond",
                 json={"question": question},
-                timeout=30,
+                timeout=30000,
             )
             response.raise_for_status()
             data = response.json()
