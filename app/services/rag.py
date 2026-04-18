@@ -11,11 +11,13 @@ This module handles the complete RAG pipeline:
 import io
 import os
 from typing import List, Optional
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.docstore.document import Document
-from langchain.embeddings import OllamaEmbeddings
-from langchain.llms import Ollama
-from langchain.vectorstores import PGVector
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_ollama import OllamaLLM as Ollama
+from langchain_core.documents import Document
+from langchain_ollama import OllamaEmbeddings
+from langchain_community.vectorstores import PGVector
+import fitz
+import docx
 
 VECTORSTORE_TABLE_NAME = os.getenv("VECTORSTORE_TABLE_NAME", "rag_documents")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/ragbot")
@@ -55,7 +57,6 @@ def _get_vectorstore() -> PGVector:
 
 def _extract_text_from_pdf(file_bytes: bytes) -> str:
     """Extract text from a PDF file's byte stream."""
-    import fitz
 
     with fitz.open(stream=file_bytes, filetype="pdf") as document:
         return "\n\n".join(page.get_text() for page in document)
@@ -63,7 +64,6 @@ def _extract_text_from_pdf(file_bytes: bytes) -> str:
 
 def _extract_text_from_docx(file_bytes: bytes) -> str:
     """Extract text from a DOCX file's byte stream."""
-    import docx
 
     document = docx.Document(io.BytesIO(file_bytes))
     return "\n\n".join(paragraph.text for paragraph in document.paragraphs if paragraph.text)

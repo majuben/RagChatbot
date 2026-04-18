@@ -7,8 +7,8 @@ large language model and the embeddings endpoint.
 
 import os
 from dotenv import load_dotenv
-from langchain.embeddings import OllamaEmbeddings
-from langchain.llms import Ollama
+from langchain_ollama import OllamaEmbeddings
+from langchain_ollama import OllamaLLM
 
 load_dotenv()
 
@@ -21,8 +21,8 @@ def get_ollama_url() -> str:
     return os.getenv("OLLAMA_URL", "http://localhost:11434")
 
 
-def build_llm() -> Ollama:
-    return Ollama(model=get_ollama_model(), base_url=get_ollama_url())
+def build_llm() -> OllamaLLM:
+    return OllamaLLM(model=get_ollama_model(), base_url=get_ollama_url())
 
 
 def build_embeddings() -> OllamaEmbeddings:
