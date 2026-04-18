@@ -13,17 +13,28 @@ from langchain_ollama import OllamaLLM
 load_dotenv()
 
 
-def get_ollama_model() -> str:
-    return os.getenv("OLLAMA_MODEL", "llama2")
+import os
+from langchain_ollama import OllamaLLM, OllamaEmbeddings 
 
+def get_ollama_model() -> str:
+    # Updated default to a more modern model like llama3 or mistral
+    return os.getenv("OLLAMA_MODEL", "gemma4:e2b")
+
+def get_ollama_embedding_model() -> str:
+    # Use a dedicated embedding model as the default
+    return os.getenv("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text")
 
 def get_ollama_url() -> str:
-    return os.getenv("OLLAMA_URL", "http://localhost:11434")
-
+    return os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 
 def build_llm() -> OllamaLLM:
-    return OllamaLLM(model=get_ollama_model(), base_url=get_ollama_url())
-
+    return OllamaLLM(
+        model=get_ollama_model(), 
+        base_url=get_ollama_url()
+    )
 
 def build_embeddings() -> OllamaEmbeddings:
-    return OllamaEmbeddings(model=get_ollama_model(), base_url=get_ollama_url())
+    return OllamaEmbeddings(
+        model=get_ollama_embedding_model(), # Use the distinct embedding model here
+        base_url=get_ollama_url()
+    )

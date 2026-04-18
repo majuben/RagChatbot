@@ -29,9 +29,9 @@ SUPPORTED_FILE_TYPES = [".pdf", ".docx"]
 
 
 def _build_embeddings() -> OllamaEmbeddings:
-    """Build Ollama embeddings connector."""
+    """Build Ollama embeddings connector using a dedicated embedding model."""
     return OllamaEmbeddings(
-        model=os.getenv("OLLAMA_MODEL", "gemma4:e2b"),
+        model=os.getenv("OLLAMA_EMBEDDING_MODEL", "nomic-embed-text"),
         base_url=os.getenv("OLLAMA_URL", "http://localhost:11434"),
     )
 
@@ -39,7 +39,7 @@ def _build_embeddings() -> OllamaEmbeddings:
 def _build_llm() -> Ollama:
     """Build Ollama LLM connector."""
     return Ollama(
-        model=os.getenv("OLLAMA_MODEL", "gemma4:e2b"),
+        model=os.getenv("OLLAMA_MODEL", "gemma2:2b"), 
         base_url=os.getenv("OLLAMA_URL", "http://localhost:11434"),
     )
 
@@ -50,21 +50,18 @@ def _get_vectorstore() -> PGVector:
     return PGVector(
         collection_name=VECTORSTORE_TABLE_NAME,
         connection_string=DATABASE_URL,
-        embedding_function=embeddings,
-        text_key="text",
+        embedding_function=embeddings
     )
 
 
 def _extract_text_from_pdf(file_bytes: bytes) -> str:
     """Extract text from a PDF file's byte stream."""
-
     with fitz.open(stream=file_bytes, filetype="pdf") as document:
         return "\n\n".join(page.get_text() for page in document)
 
 
 def _extract_text_from_docx(file_bytes: bytes) -> str:
     """Extract text from a DOCX file's byte stream."""
-
     document = docx.Document(io.BytesIO(file_bytes))
     return "\n\n".join(paragraph.text for paragraph in document.paragraphs if paragraph.text)
 
@@ -146,7 +143,8 @@ Context:
 Question: {question}
 
 Answer:"""
-    response = llm(prompt)
+    # Mise à jour de l'appel pour utiliser la méthode standard de LangChain
+    response = llm.invoke(prompt)
     return response.strip()
 
 
